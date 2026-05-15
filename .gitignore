@@ -188,3 +188,4 @@ docker-compose.yaml
 statics/
 .claude
 CLAUDE.md.env
+.env
