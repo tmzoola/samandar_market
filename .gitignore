@@ -187,4 +187,4 @@ workfile.txt
 docker-compose.yaml
 statics/
 .claude
-CLAUDE.md
+CLAUDE.md.env
