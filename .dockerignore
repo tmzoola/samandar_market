@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Git / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Legacy project files in this repo (not part of the POS)
+app/
+entrypoint.sh
+Makefile
+pkce.js
+tests/
+
+# Don't bake local model cache or postgres dumps into the image
+models/
+*.dump
+
+# Logs / build artefacts
+*.log
+dist/
+build/
