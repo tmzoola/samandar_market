@@ -1103,13 +1103,23 @@ function handleBarcodeScan(code) {
         toast(`⚠️ Shtrix-kod topilmadi: ${code}`);
         return;
     }
-    flashScanIndicator(`✓ ${product.name}`, 'ok');
     if (product.sold_by === 'weight') {
         // Can't infer weight from a regular EAN — pop the modal so the
-        // cashier types the weighed amount.
-        openWeightModal(product);
+        // cashier types the weighed amount. If this product is already
+        // in the basket, prefill the modal with its current weight so a
+        // second scan means "edit" rather than "reset to 1 kg".
+        const existing = state.basket.get(product.id);
+        openWeightModal(product, existing ? existing.quantity : null);
+        const label = existing
+            ? `✎ ${product.name} (${fmtQty(product, existing.quantity)})`
+            : `⚖ ${product.name}`;
+        flashScanIndicator(label, 'ok');
     } else {
         addToBasket(product.id, 1);
+        // Surface the running count so a stacked scan is obvious.
+        const entry = state.basket.get(product.id);
+        const newQty = entry ? entry.quantity : 1;
+        flashScanIndicator(`✓ ${product.name} × ${newQty}`, 'ok');
     }
 }
 

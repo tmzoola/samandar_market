@@ -36,6 +36,17 @@ class Product(Base):
     )
     # Display label for fractional quantities — typically "kg". NULL for unit products.
     unit_label: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Current on-hand stock. Decimal so weight items can hold 1.300 kg.
+    # Can go negative if the cashier sells items the system thinks are gone
+    # (real shelves drift from the DB) — admin reconciles via "Adjust".
+    stock: Mapped[Decimal] = mapped_column(
+        Numeric(14, 3), nullable=False, server_default="0"
+    )
+    # When `stock <= threshold`, the product appears in the low-stock view.
+    # NULL means "no alert configured" — product won't be flagged.
+    low_stock_threshold: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 3), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -87,3 +98,33 @@ class Admin(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class StockMovement(Base):
+    """Append-only audit log of every change to a product's stock.
+
+    `delta` is signed (sale = negative, refill = positive); `balance_after`
+    is the on-hand stock immediately after applying this row, denormalised
+    so the admin panel can render history without rolling sums.
+    """
+
+    __tablename__ = "stock_movements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    delta: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    # One of: "sale", "refill", "adjustment", "void".
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    # SET NULL on transaction delete (void) so the audit row survives.
+    transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    product: Mapped[Product] = relationship(lazy="joined")

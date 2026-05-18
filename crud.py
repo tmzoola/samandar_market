@@ -16,7 +16,7 @@ from sqlalchemy import and_, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Admin, Product, Transaction, TransactionItem
+from models import Admin, Product, StockMovement, Transaction, TransactionItem
 from schemas import CheckoutIn
 
 # All monetary math uses Decimal, then rounds half-up to whole UZS so the
@@ -112,6 +112,7 @@ async def create_transaction(db: AsyncSession, payload: CheckoutIn) -> Transacti
 
     total = 0
     items: list[TransactionItem] = []
+    qty_by_pid: dict[int, Decimal] = {}
     for entry in payload.items:
         product = products[entry.product_id]
         unit_price = product.price
@@ -131,6 +132,10 @@ async def create_transaction(db: AsyncSession, payload: CheckoutIn) -> Transacti
             quantity=qty,
             unit_price=unit_price,
         ))
+        # Accumulate per-product quantity in case the cashier scanned the
+        # same item twice as separate line entries (shouldn't happen in
+        # current UI, but be defensive).
+        qty_by_pid[product.id] = qty_by_pid.get(product.id, Decimal("0")) + qty
 
     if payload.cash_received < total:
         raise ValueError(
@@ -144,9 +149,65 @@ async def create_transaction(db: AsyncSession, payload: CheckoutIn) -> Transacti
         items=items,
     )
     db.add(transaction)
+    # Flush so the transaction gets an id we can reference from movements.
+    await db.flush()
+
+    # Decrement stock + write a sale movement for each distinct product.
+    for pid, qty in qty_by_pid.items():
+        product = products[pid]
+        product.stock = (Decimal(product.stock) - qty).quantize(_QTY_QUANT)
+        db.add(StockMovement(
+            product_id=pid,
+            delta=-qty,
+            balance_after=product.stock,
+            reason="sale",
+            transaction_id=transaction.id,
+        ))
+
     await db.commit()
     await db.refresh(transaction)
     return transaction
+
+
+async def void_transaction(db: AsyncSession, transaction: Transaction) -> None:
+    """Hard-delete a transaction and restore stock for each line.
+
+    Original `sale` movements remain (their `transaction_id` becomes NULL
+    via the FK's ON DELETE SET NULL) so the audit log shows both the sale
+    and the void.
+    """
+    # Aggregate per product first so we apply one stock change per product
+    # even if the transaction had multiple line items for the same item.
+    qty_by_pid: dict[int, Decimal] = {}
+    for it in transaction.items:
+        qty = it.quantity if isinstance(it.quantity, Decimal) else Decimal(str(it.quantity))
+        qty_by_pid[it.product_id] = qty_by_pid.get(it.product_id, Decimal("0")) + qty
+
+    if qty_by_pid:
+        prod_result = await db.execute(
+            select(Product).where(Product.id.in_(qty_by_pid.keys()))
+        )
+        products = {p.id: p for p in prod_result.scalars().all()}
+        note = f"void tx #{transaction.id}"
+        for pid, qty in qty_by_pid.items():
+            product = products.get(pid)
+            if product is None:
+                continue
+            product.stock = (Decimal(product.stock) + qty).quantize(_QTY_QUANT)
+            db.add(StockMovement(
+                product_id=pid,
+                delta=qty,
+                balance_after=product.stock,
+                reason="void",
+                transaction_id=transaction.id,
+                note=note,
+            ))
+        # Flush stock changes + void movements before deleting the row
+        # (movements' transaction_id will be SET NULL by the FK cascade).
+        await db.flush()
+
+    await db.delete(transaction)
+    await db.commit()
 
 
 async def get_transactions_for_day(db: AsyncSession, day: date) -> list[Transaction]:
@@ -311,3 +372,87 @@ async def create_admin(db: AsyncSession, username: str, hashed_password: str) ->
     await db.commit()
     await db.refresh(admin)
     return admin
+
+
+# ---------- Inventory ----------
+
+def _stock_status(product: Product) -> str:
+    stock = Decimal(product.stock or 0)
+    if stock <= 0:
+        return "out"
+    threshold = product.low_stock_threshold
+    if threshold is not None and stock <= Decimal(threshold):
+        return "low"
+    return "ok"
+
+
+async def refill_product(
+    db: AsyncSession,
+    product: Product,
+    quantity: Decimal,
+    note: str | None = None,
+) -> StockMovement:
+    qty = Decimal(str(quantity)).quantize(_QTY_QUANT, rounding=ROUND_HALF_UP)
+    if qty <= 0:
+        raise ValueError("Refill quantity must be > 0")
+    product.stock = (Decimal(product.stock) + qty).quantize(_QTY_QUANT)
+    movement = StockMovement(
+        product_id=product.id,
+        delta=qty,
+        balance_after=product.stock,
+        reason="refill",
+        note=note,
+    )
+    db.add(movement)
+    await db.commit()
+    await db.refresh(movement)
+    return movement
+
+
+async def adjust_product_stock(
+    db: AsyncSession,
+    product: Product,
+    new_stock: Decimal,
+    note: str,
+) -> StockMovement:
+    new_value = Decimal(str(new_stock)).quantize(_QTY_QUANT, rounding=ROUND_HALF_UP)
+    if new_value < 0:
+        raise ValueError("Stock cannot be negative")
+    delta = (new_value - Decimal(product.stock)).quantize(_QTY_QUANT)
+    product.stock = new_value
+    movement = StockMovement(
+        product_id=product.id,
+        delta=delta,
+        balance_after=product.stock,
+        reason="adjustment",
+        note=note,
+    )
+    db.add(movement)
+    await db.commit()
+    await db.refresh(movement)
+    return movement
+
+
+async def list_inventory(
+    db: AsyncSession, *, only_active: bool = True
+) -> list[Product]:
+    stmt = select(Product)
+    if only_active:
+        stmt = stmt.where(Product.is_active.is_(True))
+    stmt = stmt.order_by(Product.category, Product.name)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_movements(
+    db: AsyncSession,
+    *,
+    product_id: int | None = None,
+    limit: int = 100,
+) -> list[StockMovement]:
+    stmt = select(StockMovement)
+    if product_id is not None:
+        stmt = stmt.where(StockMovement.product_id == product_id)
+    stmt = stmt.order_by(desc(StockMovement.created_at)).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
