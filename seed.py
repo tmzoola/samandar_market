@@ -42,6 +42,8 @@ async def seed_products() -> int:
                 "is_active": True,
                 "sold_by": p.get("sold_by", "unit"),
                 "unit_label": p.get("unit_label"),
+                "stock": p.get("stock", 0),
+                "low_stock_threshold": p.get("low_stock_threshold"),
             }
             for p in PRODUCTS
         ]

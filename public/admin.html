@@ -194,6 +194,7 @@
         <nav class="tabs">
             <button class="tab active" data-tab="overview">Umumiy</button>
             <button class="tab" data-tab="products">Mahsulotlar</button>
+            <button class="tab" data-tab="inventory">Ombor</button>
             <button class="tab" data-tab="daily">Kunlik hisobot</button>
         </nav>
         <div class="grow"></div>
@@ -241,12 +242,58 @@
                             <th>Nomi</th>
                             <th>Kategoriya</th>
                             <th class="num">Narx</th>
+                            <th class="num">Qoldiq</th>
                             <th>Shtrix-kod</th>
                             <th>Holat</th>
                             <th style="width: 1px;"></th>
                         </tr>
                     </thead>
                     <tbody id="prodBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- =========== INVENTORY =========== -->
+        <section class="panel" data-panel="inventory">
+            <div class="grid-4" id="inventoryStats"></div>
+
+            <div class="card">
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom: 14px;">
+                    <h2 style="margin: 0;">⚠ Tugayotgan mahsulotlar</h2>
+                    <div style="font-size: 13px; color: var(--muted);">Past kelishi past bo'lgan mahsulotlar — eng ko'p ehtiyojli birinchi</div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Mahsulot</th>
+                            <th>Kategoriya</th>
+                            <th class="num">Qoldiq</th>
+                            <th class="num">Past kelishi</th>
+                            <th>Holat</th>
+                            <th style="width: 1px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="lowStockBody"></tbody>
+                </table>
+            </div>
+
+            <div class="card">
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom: 14px;">
+                    <h2 style="margin: 0;">📦 Butun ombor</h2>
+                    <input type="text" id="invSearch" placeholder="Qidirish..." style="padding: 8px 11px; border: 2px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; background: #fff;" />
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Mahsulot</th>
+                            <th>Kategoriya</th>
+                            <th class="num">Qoldiq</th>
+                            <th class="num">Past kelishi</th>
+                            <th>Holat</th>
+                            <th style="width: 1px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="invBody"></tbody>
                 </table>
             </div>
         </section>
@@ -318,10 +365,41 @@
             <label>Shtrix-kod (ixtiyoriy)</label>
             <input id="pBarcode" type="text" placeholder="Skannerlab kiriting yoki qo'lda yozing" autocomplete="off" />
         </div>
+        <div class="weight-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div class="field" style="margin: 0;">
+                <label id="pStockLabel">Qoldiq</label>
+                <input id="pStock" type="number" step="0.001" min="0" placeholder="0" />
+            </div>
+            <div class="field" style="margin: 0;">
+                <label id="pThresholdLabel">Past kelishi (ogohlantirish)</label>
+                <input id="pThreshold" type="number" step="0.001" min="0" placeholder="bo'sh = ogohlantirish yo'q" />
+            </div>
+        </div>
         <div class="field"><label><input id="pActive" type="checkbox" /> Faol</label></div>
         <div class="actions">
             <button type="button" class="btn" id="prodCancel">Bekor</button>
             <button type="submit" class="btn primary">Saqlash</button>
+        </div>
+    </form>
+</div>
+
+<!-- ========== REFILL MODAL ========== -->
+<div class="modal-backdrop" id="refillModal">
+    <form class="modal" id="refillForm">
+        <h3 id="refillTitle">Ombor to'ldirish</h3>
+        <div class="sub" id="refillSub" style="color: var(--muted); margin-bottom: 14px; font-size: 13px;"></div>
+        <input type="hidden" id="rfId" />
+        <div class="field">
+            <label>Qancha qo'shish</label>
+            <input id="rfQty" type="number" step="0.001" min="0.001" required />
+        </div>
+        <div class="field">
+            <label>Izoh (ixtiyoriy)</label>
+            <input id="rfNote" type="text" maxlength="200" placeholder="Masalan: yetkazib beruvchi nomi, sana" />
+        </div>
+        <div class="actions">
+            <button type="button" class="btn" id="refillCancel">Bekor</button>
+            <button type="submit" class="btn success">+ Qo'shish</button>
         </div>
     </form>
 </div>
@@ -428,6 +506,7 @@ document.querySelectorAll('.tab').forEach(btn => {
         document.querySelector(`.panel[data-panel="${tab}"]`).classList.add('active');
         if (tab === 'overview') loadOverview();
         if (tab === 'products') loadProducts();
+        if (tab === 'inventory') loadInventory();
         if (tab === 'daily') loadDaily();
     });
 });
@@ -465,7 +544,7 @@ function renderProducts() {
     const body = $('prodBody');
     body.innerHTML = '';
     if (filtered.length === 0) {
-        body.innerHTML = '<tr class="empty-row"><td colspan="6">Mahsulot topilmadi</td></tr>';
+        body.innerHTML = '<tr class="empty-row"><td colspan="7">Mahsulot topilmadi</td></tr>';
         return;
     }
     for (const p of filtered) {
@@ -478,10 +557,12 @@ function renderProducts() {
             <td>${escapeHtml(p.emoji || '')} ${escapeHtml(p.name)} ${soldByPill}</td>
             <td>${escapeHtml(p.category)}</td>
             <td class="num">${fmt(p.price)}${priceSuffix}</td>
+            <td class="num">${renderStockCell(p)}</td>
             <td>${escapeHtml(p.barcode || '—')}</td>
             <td><span class="pill ${p.is_active ? 'active' : 'inactive'}">${p.is_active ? 'Faol' : 'O\'chirilgan'}</span></td>
             <td style="white-space: nowrap;">
                 <button class="btn sm" data-edit="${p.id}">Tahrirlash</button>
+                <button class="btn sm success" data-refill="${p.id}" title="Ombor to'ldirish">+ Refill</button>
                 ${p.is_active ? `<button class="btn sm danger" data-soft="${p.id}" title="Cashier ko'rmaydi, lekin tarixda saqlanadi">🚫 Nofaol</button>` : ''}
                 <button class="btn sm danger" data-hard="${p.id}" title="DB dan butunlay o'chirish (faqat tarixsiz mahsulotlar)">🗑 O'chirish</button>
             </td>
@@ -490,6 +571,7 @@ function renderProducts() {
     }
 
     body.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => openProductModal(Number(b.dataset.edit))));
+    body.querySelectorAll('[data-refill]').forEach(b => b.addEventListener('click', () => openRefillModal(Number(b.dataset.refill))));
     body.querySelectorAll('[data-soft]').forEach(b => b.addEventListener('click', () => softDeleteProduct(Number(b.dataset.soft))));
     body.querySelectorAll('[data-hard]').forEach(b => b.addEventListener('click', () => hardDeleteProduct(Number(b.dataset.hard))));
 }
@@ -502,9 +584,10 @@ function refreshSoldByUi() {
     const sb = $('pSoldBy').value;
     const isWeight = sb === 'weight';
     $('pUnitLabelRow').style.display = isWeight ? '' : 'none';
-    $('pPriceLabel').textContent = isWeight
-        ? `Narx (so'm / ${($('pUnitLabel').value.trim() || 'kg')})`
-        : `Narx (so'm)`;
+    const unit = isWeight ? ($('pUnitLabel').value.trim() || 'kg') : 'dona';
+    $('pPriceLabel').textContent = isWeight ? `Narx (so'm / ${unit})` : `Narx (so'm)`;
+    $('pStockLabel').textContent = `Qoldiq (${unit})`;
+    $('pThresholdLabel').textContent = `Past kelishi (${unit})`;
 }
 $('pSoldBy').addEventListener('change', refreshSoldByUi);
 // Update price label live as user types the unit label.
@@ -528,11 +611,15 @@ function openProductModal(id) {
         $('pActive').checked = p.is_active;
         $('pSoldBy').value = p.sold_by || 'unit';
         $('pUnitLabel').value = p.unit_label || '';
+        $('pStock').value = p.stock ?? 0;
+        $('pThreshold').value = p.low_stock_threshold ?? '';
     } else {
         $('prodForm').reset();
         $('pActive').checked = true;
         $('pSoldBy').value = 'unit';
         $('pUnitLabel').value = '';
+        $('pStock').value = 0;
+        $('pThreshold').value = '';
     }
     refreshSoldByUi();
     $('prodModal').classList.add('open');
@@ -554,6 +641,7 @@ $('prodForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = $('pId').value;
     const soldBy = $('pSoldBy').value;
+    const thresholdRaw = $('pThreshold').value.trim();
     const payload = {
         name: $('pName').value.trim(),
         category: $('pCategory').value.trim(),
@@ -563,6 +651,8 @@ $('prodForm').addEventListener('submit', async (e) => {
         is_active: $('pActive').checked,
         sold_by: soldBy,
         unit_label: soldBy === 'weight' ? ($('pUnitLabel').value.trim() || 'kg') : null,
+        stock: Number($('pStock').value) || 0,
+        low_stock_threshold: thresholdRaw === '' ? null : Number(thresholdRaw),
     };
     try {
         if (id) {
@@ -603,6 +693,184 @@ async function hardDeleteProduct(id) {
         toast(err.message);
     }
 }
+
+// =========================================================================
+// INVENTORY
+// =========================================================================
+function fmtStock(p) {
+    const v = Number(p.stock || 0);
+    if (p.sold_by === 'weight') {
+        return `${v.toFixed(3).replace(/\.?0+$/, '')} ${p.unit_label || 'kg'}`;
+    }
+    return `${Math.round(v)} dona`;
+}
+
+function statusPill(status) {
+    if (status === 'out')
+        return `<span class="pill" style="background:#fee2e2; color:#7f1d1d;">⛔ Tugadi</span>`;
+    if (status === 'low')
+        return `<span class="pill" style="background:#fef3c7; color:#92400e;">⚠ Past</span>`;
+    return `<span class="pill" style="background:#dcfce7; color:#14532d;">✓ OK</span>`;
+}
+
+function statusFromProduct(p) {
+    const s = Number(p.stock || 0);
+    if (s <= 0) return 'out';
+    if (p.low_stock_threshold != null && s <= Number(p.low_stock_threshold)) return 'low';
+    return 'ok';
+}
+
+function renderStockCell(p) {
+    const status = statusFromProduct(p);
+    const color = status === 'out' ? 'color:#b91c1c; font-weight:700;'
+                : status === 'low' ? 'color:#92400e; font-weight:600;' : '';
+    return `<span style="${color}">${fmtStock(p)}</span>`;
+}
+
+let _inventoryItems = [];
+
+async function loadInventory() {
+    try {
+        const report = await api('/api/inventory?include_inactive=false');
+        _inventoryItems = report.items;
+        renderInventoryStats(report);
+        renderLowStock(report.items);
+        renderFullInventory(report.items);
+    } catch (err) { toast(err.message); }
+}
+
+function renderInventoryStats(report) {
+    $('inventoryStats').innerHTML = `
+        <div class="stat">
+            <div class="label">Mahsulotlar</div>
+            <div class="value">${fmtInt(report.total_products)}</div>
+            <div class="sub">faol</div>
+        </div>
+        <div class="stat">
+            <div class="label">Tugagan</div>
+            <div class="value" style="color:#b91c1c;">${fmtInt(report.out_of_stock)}</div>
+            <div class="sub">qoldiq 0</div>
+        </div>
+        <div class="stat">
+            <div class="label">Tugayotgan</div>
+            <div class="value" style="color:#92400e;">${fmtInt(report.low_stock)}</div>
+            <div class="sub">past kelishi ostida</div>
+        </div>
+        <div class="stat">
+            <div class="label">Sog'lom</div>
+            <div class="value" style="color:#15803d;">${fmtInt(report.total_products - report.low_stock - report.out_of_stock)}</div>
+            <div class="sub">to'liq</div>
+        </div>
+    `;
+}
+
+function renderLowStock(items) {
+    const flagged = items.filter(it => it.status !== 'ok');
+    // Most urgent first: out-of-stock, then by stock/threshold ratio.
+    flagged.sort((a, b) => {
+        const ax = a.status === 'out' ? 0 : 1;
+        const bx = b.status === 'out' ? 0 : 1;
+        if (ax !== bx) return ax - bx;
+        const ar = a.low_stock_threshold ? a.stock / a.low_stock_threshold : a.stock;
+        const br = b.low_stock_threshold ? b.stock / b.low_stock_threshold : b.stock;
+        return ar - br;
+    });
+    const body = $('lowStockBody');
+    body.innerHTML = '';
+    if (flagged.length === 0) {
+        body.innerHTML = '<tr class="empty-row"><td colspan="6">🎉 Hammasi sog\'lom — past kelishi ostida hech narsa yo\'q</td></tr>';
+        return;
+    }
+    for (const it of flagged) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${escapeHtml(it.emoji || '')} ${escapeHtml(it.name)}</td>
+            <td>${escapeHtml(it.category)}</td>
+            <td class="num">${renderStockCell(it)}</td>
+            <td class="num">${it.low_stock_threshold != null ? fmtStock({stock: it.low_stock_threshold, sold_by: it.sold_by, unit_label: it.unit_label}) : '—'}</td>
+            <td>${statusPill(it.status)}</td>
+            <td><button class="btn sm success" data-rf="${it.product_id}">+ Refill</button></td>
+        `;
+        body.appendChild(tr);
+    }
+    body.querySelectorAll('[data-rf]').forEach(b => b.addEventListener('click', () => openRefillModal(Number(b.dataset.rf))));
+}
+
+function renderFullInventory(items) {
+    const q = ($('invSearch').value || '').trim().toLowerCase();
+    const filtered = q ? items.filter(it =>
+        it.name.toLowerCase().includes(q) || it.category.toLowerCase().includes(q)
+    ) : items;
+    const body = $('invBody');
+    body.innerHTML = '';
+    if (filtered.length === 0) {
+        body.innerHTML = '<tr class="empty-row"><td colspan="6">Topilmadi</td></tr>';
+        return;
+    }
+    for (const it of filtered) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${escapeHtml(it.emoji || '')} ${escapeHtml(it.name)}</td>
+            <td>${escapeHtml(it.category)}</td>
+            <td class="num">${renderStockCell(it)}</td>
+            <td class="num">${it.low_stock_threshold != null ? fmtStock({stock: it.low_stock_threshold, sold_by: it.sold_by, unit_label: it.unit_label}) : '—'}</td>
+            <td>${statusPill(it.status)}</td>
+            <td><button class="btn sm success" data-rf="${it.product_id}">+ Refill</button></td>
+        `;
+        body.appendChild(tr);
+    }
+    body.querySelectorAll('[data-rf]').forEach(b => b.addEventListener('click', () => openRefillModal(Number(b.dataset.rf))));
+}
+
+$('invSearch').addEventListener('input', () => renderFullInventory(_inventoryItems));
+
+// ---- Refill modal ----
+function openRefillModal(productId) {
+    // Refill can be triggered from products or inventory tab — find the
+    // record in whichever list is loaded.
+    const fromInv = _inventoryItems.find(x => x.product_id === productId);
+    const fromProd = _allProducts.find(x => x.id === productId);
+    if (!fromInv && !fromProd) return;
+
+    const name = fromInv ? fromInv.name : fromProd.name;
+    const emoji = (fromInv && fromInv.emoji) || (fromProd && fromProd.emoji) || '';
+    const sold_by = fromInv ? fromInv.sold_by : (fromProd ? fromProd.sold_by : 'unit');
+    const unit_label = fromInv ? fromInv.unit_label : (fromProd ? fromProd.unit_label : null);
+    const stock = fromInv ? fromInv.stock : (fromProd ? fromProd.stock : 0);
+
+    $('rfId').value = productId;
+    $('refillTitle').textContent = `Ombor to'ldirish — ${emoji} ${name}`.trim();
+    $('refillSub').textContent = `Hozirgi qoldiq: ${fmtStock({stock, sold_by, unit_label})}`;
+    $('rfQty').value = '';
+    $('rfNote').value = '';
+    $('refillModal').classList.add('open');
+    setTimeout(() => $('rfQty').focus(), 50);
+}
+
+function closeRefillModal() { $('refillModal').classList.remove('open'); }
+$('refillCancel').addEventListener('click', closeRefillModal);
+$('refillModal').addEventListener('click', (e) => { if (e.target === $('refillModal')) closeRefillModal(); });
+
+$('refillForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = Number($('rfId').value);
+    const quantity = Number($('rfQty').value);
+    if (!isFinite(quantity) || quantity <= 0) {
+        toast("⚠️ Miqdor 0 dan katta bo'lishi kerak");
+        return;
+    }
+    const payload = {
+        quantity,
+        note: $('rfNote').value.trim() || null,
+    };
+    try {
+        await api(`/api/inventory/${id}/refill`, { method: 'POST', body: JSON.stringify(payload) });
+        toast('Ombor to\'ldirildi');
+        closeRefillModal();
+        // Refresh whichever views are loaded.
+        await Promise.all([loadInventory(), loadProducts().catch(() => {})]);
+    } catch (err) { toast(err.message); }
+});
 
 // =========================================================================
 // DAILY REPORT
