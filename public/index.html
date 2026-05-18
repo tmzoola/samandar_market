@@ -94,6 +94,31 @@
     }
     .btn-new:hover { background: #e2e8f0; }
 
+    .scan-indicator {
+        font-size: 13px;
+        font-weight: 600;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: #ecfeff;
+        color: #0e7490;
+        border: 1px solid #a5f3fc;
+        white-space: nowrap;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        transition: all 0.2s;
+    }
+    .scan-indicator.scan-ok {
+        background: #dcfce7;
+        color: #15803d;
+        border-color: #86efac;
+    }
+    .scan-indicator.scan-err {
+        background: #fee2e2;
+        color: #b91c1c;
+        border-color: #fecaca;
+    }
+
     /* ---------- Main ---------- */
     .main {
         flex: 1;
@@ -597,6 +622,7 @@
         <div class="search">
             <input id="search" type="text" placeholder="Mahsulot qidirish..." autocomplete="off" />
         </div>
+        <div class="scan-indicator" id="scanIndicator" title="Shtrix-kod skaneri tayyor — mahsulotni o'qiting">📡 Scan tayyor</div>
         <button class="btn-new" id="btnNew">🔄 Yangi mijoz</button>
     </header>
 
@@ -698,6 +724,7 @@ const parseNum = (s) => {
 const state = {
     products: [],
     productById: new Map(),
+    productByBarcode: new Map(),
     categories: [],
     activeCategory: 'all',
     search: '',
@@ -734,6 +761,11 @@ async function loadCatalog() {
     state.products = data.products || [];
     state.categories = data.categories || [];
     state.productById = new Map(state.products.map(p => [p.id, p]));
+    state.productByBarcode = new Map(
+        state.products
+            .filter(p => p.barcode)
+            .map(p => [String(p.barcode).trim(), p])
+    );
     renderCategories();
     renderProducts();
 }
@@ -1032,6 +1064,86 @@ el('weightForm').addEventListener('submit', (e) => {
         renderBasket();
     }
     closeWeightModal();
+});
+
+// ===== Barcode scanner (HID keyboard-wedge) =====
+// Most retail USB scanners emit each character as a fast keystroke, then
+// send Enter. We detect that pattern: tight gap between keys + Enter
+// terminator. Manual typing has 100ms+ gaps so it won't trip the heuristic.
+const SCAN_MAX_GAP_MS = 80;     // max gap between scanner keystrokes
+const SCAN_MIN_LENGTH = 4;      // shortest plausible barcode (EAN-8 is 8 digits)
+let _scanBuffer = '';
+let _scanLastKeyAt = 0;
+let _scanIndicatorTimer = null;
+
+function isEditableTarget(t) {
+    if (!t) return false;
+    const tag = (t.tagName || '').toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
+}
+
+function flashScanIndicator(text, kind) {
+    const ind = el('scanIndicator');
+    if (!ind) return;
+    ind.classList.remove('scan-ok', 'scan-err');
+    if (kind === 'ok') ind.classList.add('scan-ok');
+    if (kind === 'err') ind.classList.add('scan-err');
+    ind.textContent = text;
+    clearTimeout(_scanIndicatorTimer);
+    _scanIndicatorTimer = setTimeout(() => {
+        ind.classList.remove('scan-ok', 'scan-err');
+        ind.textContent = '📡 Scan tayyor';
+    }, 2500);
+}
+
+function handleBarcodeScan(code) {
+    const product = state.productByBarcode.get(code);
+    if (!product) {
+        flashScanIndicator(`❌ ${code} topilmadi`, 'err');
+        toast(`⚠️ Shtrix-kod topilmadi: ${code}`);
+        return;
+    }
+    flashScanIndicator(`✓ ${product.name}`, 'ok');
+    if (product.sold_by === 'weight') {
+        // Can't infer weight from a regular EAN — pop the modal so the
+        // cashier types the weighed amount.
+        openWeightModal(product);
+    } else {
+        addToBasket(product.id, 1);
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    // Let the user type freely in inputs / textareas / selects.
+    if (isEditableTarget(e.target)) return;
+
+    const now = performance.now();
+    const gap = now - _scanLastKeyAt;
+    _scanLastKeyAt = now;
+
+    // Stale buffer? Reset if too much time passed since the last char.
+    if (gap > SCAN_MAX_GAP_MS && _scanBuffer.length > 0) {
+        _scanBuffer = '';
+    }
+
+    if (e.key === 'Enter' || e.key === 'Tab') {
+        if (_scanBuffer.length >= SCAN_MIN_LENGTH) {
+            const code = _scanBuffer;
+            _scanBuffer = '';
+            e.preventDefault();
+            handleBarcodeScan(code);
+        } else {
+            _scanBuffer = '';
+        }
+        return;
+    }
+
+    // Buffer single printable characters (digits, occasionally letters for Code-128).
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        _scanBuffer += e.key;
+        // Cap buffer length to avoid runaway accumulation.
+        if (_scanBuffer.length > 40) _scanBuffer = _scanBuffer.slice(-40);
+    }
 });
 
 // ===== Checkout =====

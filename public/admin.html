@@ -314,7 +314,10 @@
             <input id="pPrice" type="number" min="0" step="100" required />
         </div>
         <div class="field"><label>Emoji</label><input id="pEmoji" type="text" maxlength="4" placeholder="📦" /></div>
-        <div class="field"><label>Shtrix-kod (ixtiyoriy)</label><input id="pBarcode" type="text" /></div>
+        <div class="field">
+            <label>Shtrix-kod (ixtiyoriy)</label>
+            <input id="pBarcode" type="text" placeholder="Skannerlab kiriting yoki qo'lda yozing" autocomplete="off" />
+        </div>
         <div class="field"><label><input id="pActive" type="checkbox" /> Faol</label></div>
         <div class="actions">
             <button type="button" class="btn" id="prodCancel">Bekor</button>
@@ -538,6 +541,14 @@ function openProductModal(id) {
 function closeProductModal() { $('prodModal').classList.remove('open'); }
 $('prodCancel').addEventListener('click', closeProductModal);
 $('prodModal').addEventListener('click', (e) => { if (e.target === $('prodModal')) closeProductModal(); });
+
+// Most USB barcode scanners send the digits then an Enter keystroke. If
+// that Enter reaches the form, it submits a half-filled product — so
+// swallow Enter inside the barcode field. The cashier confirms with the
+// Save button when ready.
+$('pBarcode').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') e.preventDefault();
+});
 
 $('prodForm').addEventListener('submit', async (e) => {
     e.preventDefault();
