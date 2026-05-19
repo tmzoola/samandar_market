@@ -225,11 +225,15 @@
         color: #991b1b;
     }
     .product-card.out-of-stock {
-        opacity: 0.6;
+        opacity: 0.55;
         background: #fafafa;
+        cursor: not-allowed;
     }
     .product-card.out-of-stock:hover {
-        opacity: 0.85;
+        opacity: 0.75;
+        transform: none;
+        border-color: var(--border);
+        box-shadow: var(--shadow);
     }
     .product-card.low-stock {
         border-color: #fbbf24;
@@ -853,8 +857,10 @@ function renderProducts() {
         `;
         card.onclick = () => {
             if (stockState === 'out') {
-                toast(`⛔ ${p.name}: ombor tugadi (lekin qo'shdim — admin tekshirib chiqsin)`);
-            } else if (stockState === 'low') {
+                toast(`⛔ ${p.name}: ombor tugagan — savatchaga qo'shilmaydi`);
+                return;
+            }
+            if (stockState === 'low') {
                 toast(`⚠️ ${p.name}: kam qoldi (${fmtStock(p)})`);
             }
             if (p.sold_by === 'weight') {
@@ -1162,6 +1168,11 @@ function handleBarcodeScan(code) {
     if (!product) {
         flashScanIndicator(`❌ ${code} topilmadi`, 'err');
         toast(`⚠️ Shtrix-kod topilmadi: ${code}`);
+        return;
+    }
+    if (productStockState(product) === 'out') {
+        flashScanIndicator(`⛔ ${product.name}: tugagan`, 'err');
+        toast(`⛔ ${product.name}: ombor tugagan — savatchaga qo'shilmaydi`);
         return;
     }
     if (product.sold_by === 'weight') {
