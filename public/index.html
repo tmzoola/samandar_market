@@ -581,12 +581,105 @@
         transform: translateX(-50%) translateY(0);
     }
 
-    /* ---------- Responsive (Telegram side / narrow screens) ---------- */
+    /* ---------- Responsive ---------- */
+    /* 13" laptops (MacBook Air M1/M2/M3 render at ~1440-1470 effective) —
+       tighten paddings and font sizes. 1512px also covers 13" Pro defaults. */
+    @media (max-width: 1512px) {
+        body { font-size: 15px; }
+        .header { padding: 10px 18px; gap: 12px; }
+        .brand { font-size: 18px; }
+        .search input { font-size: 15px; padding: 10px 12px 10px 40px; }
+        .search::before { left: 12px; font-size: 14px; }
+        .btn-new { font-size: 14px; padding: 9px 14px; }
+
+        .products-pane { flex: 0 0 62%; }
+        .basket-pane { flex: 0 0 38%; }
+
+        .categories { padding: 12px 16px 10px; gap: 6px; }
+        .cat-btn { padding: 8px 14px; font-size: 14px; }
+
+        .product-grid {
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+            padding: 14px;
+        }
+        .product-card { padding: 12px 10px; gap: 6px; border-radius: 12px; }
+        .product-card .emoji { font-size: 32px; }
+        .product-card .name { font-size: 14px; min-height: 34px; }
+        .product-card .price { font-size: 15px; }
+
+        .basket-header { padding: 14px 16px 10px; }
+        .basket-header h2 { font-size: 17px; }
+        .basket-count { font-size: 12px; padding: 3px 9px; }
+        .basket-items { padding: 10px 14px; }
+        .basket-item { padding: 10px; gap: 6px 10px; margin-bottom: 8px; }
+        .item-name { font-size: 14px; }
+        .item-line-total { font-size: 14px; }
+        .qty-btn { width: 28px; height: 28px; font-size: 16px; }
+        .qty-val { font-size: 14px; min-width: 24px; }
+
+        .basket-footer { padding: 12px 16px 14px; }
+        .total-row { margin-bottom: 10px; }
+        .total-row .label { font-size: 14px; }
+        .total-row .value { font-size: 22px; }
+        .cash-row { gap: 8px; margin-bottom: 10px; }
+        .cash-row input { font-size: 16px; padding: 9px 11px; }
+        .change-display { font-size: 16px; padding: 9px 11px; }
+        .exact-cash-btn { padding: 9px; font-size: 13px; margin-bottom: 8px; }
+        .checkout-btn { padding: 13px; font-size: 15px; }
+    }
+
+    /* small laptops / large tablets — give the basket a bit more room */
+    @media (max-width: 1100px) {
+        .products-pane { flex: 0 0 58%; }
+        .basket-pane { flex: 0 0 42%; }
+        .product-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+        .product-card .emoji { font-size: 28px; }
+    }
+
+    /* phones / Telegram side panel — stack vertically */
     @media (max-width: 900px) {
+        body { overflow: auto; font-size: 15px; }
+        .app { height: auto; min-height: 100vh; }
+        .header { padding: 10px 14px; flex-wrap: wrap; }
+        .brand { font-size: 17px; }
+        .search { order: 3; flex-basis: 100%; max-width: none; }
         .main { flex-direction: column; }
         .products-pane, .basket-pane { flex: 1 1 auto; border-right: none; }
         .products-pane { border-bottom: 1px solid var(--border); }
-        .product-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+        .product-grid {
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+            padding: 12px;
+        }
+        .product-card .emoji { font-size: 28px; }
+        .product-card .name { font-size: 13px; min-height: 32px; }
+        .basket-pane { max-height: none; }
+        .cash-row { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 480px) {
+        .product-grid { grid-template-columns: repeat(2, 1fr); }
+        .modal { padding: 20px; }
+        .modal h2 { font-size: 19px; }
+    }
+
+    /* Short-height screens (13" Air browser viewport is ~830-900px tall after
+       menu bar + chrome) — shrink vertical padding so checkout stays above fold. */
+    @media (max-height: 920px) and (min-width: 901px) {
+        .header { padding: 8px 18px; }
+        .categories { padding: 8px 16px 6px; }
+        .product-grid { padding: 12px; gap: 10px; }
+        .product-card { padding: 10px 8px; }
+        .product-card .emoji { font-size: 28px; }
+        .product-card .name { min-height: 32px; }
+        .basket-header { padding: 10px 16px 8px; }
+        .basket-items { padding: 8px 14px; }
+        .basket-footer { padding: 10px 16px 12px; }
+        .total-row { margin-bottom: 8px; }
+        .total-row .value { font-size: 20px; }
+        .checkout-btn { padding: 11px; font-size: 15px; }
+        .exact-cash-btn { padding: 8px; margin-bottom: 6px; }
     }
 </style>
 </head>
