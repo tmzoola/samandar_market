@@ -94,6 +94,31 @@
     }
     .btn-new:hover { background: #e2e8f0; }
 
+    .scan-indicator {
+        font-size: 13px;
+        font-weight: 600;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: #ecfeff;
+        color: #0e7490;
+        border: 1px solid #a5f3fc;
+        white-space: nowrap;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        transition: all 0.2s;
+    }
+    .scan-indicator.scan-ok {
+        background: #dcfce7;
+        color: #15803d;
+        border-color: #86efac;
+    }
+    .scan-indicator.scan-err {
+        background: #fee2e2;
+        color: #b91c1c;
+        border-color: #fecaca;
+    }
+
     /* ---------- Main ---------- */
     .main {
         flex: 1;
@@ -181,6 +206,37 @@
         font-weight: 700;
         color: var(--primary);
         margin-top: auto;
+    }
+    .stock-chip {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 8px;
+        margin-top: 4px;
+        background: #f1f5f9;
+        color: #475569;
+        border-radius: 999px;
+    }
+    .stock-chip-low {
+        background: #fef3c7;
+        color: #92400e;
+    }
+    .stock-chip-out {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+    .product-card.out-of-stock {
+        opacity: 0.55;
+        background: #fafafa;
+        cursor: not-allowed;
+    }
+    .product-card.out-of-stock:hover {
+        opacity: 0.75;
+        transform: none;
+        border-color: var(--border);
+        box-shadow: var(--shadow);
+    }
+    .product-card.low-stock {
+        border-color: #fbbf24;
     }
     .empty {
         grid-column: 1 / -1;
@@ -690,6 +746,7 @@
         <div class="search">
             <input id="search" type="text" placeholder="Mahsulot qidirish..." autocomplete="off" />
         </div>
+        <div class="scan-indicator" id="scanIndicator" title="Shtrix-kod skaneri tayyor — mahsulotni o'qiting">📡 Scan tayyor</div>
         <button class="btn-new" id="btnNew">🔄 Yangi mijoz</button>
     </header>
 
@@ -791,6 +848,7 @@ const parseNum = (s) => {
 const state = {
     products: [],
     productById: new Map(),
+    productByBarcode: new Map(),
     categories: [],
     activeCategory: 'all',
     search: '',
@@ -827,6 +885,11 @@ async function loadCatalog() {
     state.products = data.products || [];
     state.categories = data.categories || [];
     state.productById = new Map(state.products.map(p => [p.id, p]));
+    state.productByBarcode = new Map(
+        state.products
+            .filter(p => p.barcode)
+            .map(p => [String(p.barcode).trim(), p])
+    );
     renderCategories();
     renderProducts();
 }
@@ -873,14 +936,26 @@ function renderProducts() {
         const badge = p.sold_by === 'weight'
             ? `<div style="position:absolute; top:8px; right:8px; background:#fef3c7; color:#78350f; font-size:11px; font-weight:700; padding:2px 7px; border-radius:999px;">⚖ ${escapeHtml(p.unit_label || 'kg')}</div>`
             : '';
+        const stockState = productStockState(p);
+        const stockChip = stockChipHtml(p, stockState);
         card.style.position = 'relative';
+        if (stockState === 'out') card.classList.add('out-of-stock');
+        else if (stockState === 'low') card.classList.add('low-stock');
         card.innerHTML = `
             ${badge}
             <div class="emoji">${p.emoji || '📦'}</div>
             <div class="name">${escapeHtml(p.name)}</div>
             <div class="price">${fmt(p.price)}${priceSuffix}</div>
+            ${stockChip}
         `;
         card.onclick = () => {
+            if (stockState === 'out') {
+                toast(`⛔ ${p.name}: ombor tugagan — savatchaga qo'shilmaydi`);
+                return;
+            }
+            if (stockState === 'low') {
+                toast(`⚠️ ${p.name}: kam qoldi (${fmtStock(p)})`);
+            }
             if (p.sold_by === 'weight') {
                 openWeightModal(p);
             } else {
@@ -889,6 +964,30 @@ function renderProducts() {
         };
         gridEl.appendChild(card);
     });
+}
+
+// Stock-state helpers for the cashier UI.
+function productStockState(p) {
+    const s = Number(p.stock || 0);
+    if (s <= 0) return 'out';
+    if (p.low_stock_threshold != null && s <= Number(p.low_stock_threshold)) return 'low';
+    return 'ok';
+}
+function fmtStock(p) {
+    const v = Number(p.stock || 0);
+    if (p.sold_by === 'weight') {
+        return `${v.toFixed(3).replace(/\.?0+$/, '')} ${p.unit_label || 'kg'}`;
+    }
+    return `${Math.round(v)} dona`;
+}
+function stockChipHtml(p, state) {
+    const text = state === 'out' ? '⛔ Tugadi'
+               : state === 'low' ? `📦 ${fmtStock(p)}`
+               : `📦 ${fmtStock(p)}`;
+    const cls = state === 'out' ? 'stock-chip stock-chip-out'
+              : state === 'low' ? 'stock-chip stock-chip-low'
+              : 'stock-chip';
+    return `<div class="${cls}">${text}</div>`;
 }
 
 function escapeHtml(s) {
@@ -1125,6 +1224,101 @@ el('weightForm').addEventListener('submit', (e) => {
         renderBasket();
     }
     closeWeightModal();
+});
+
+// ===== Barcode scanner (HID keyboard-wedge) =====
+// Most retail USB scanners emit each character as a fast keystroke, then
+// send Enter. We detect that pattern: tight gap between keys + Enter
+// terminator. Manual typing has 100ms+ gaps so it won't trip the heuristic.
+const SCAN_MAX_GAP_MS = 80;     // max gap between scanner keystrokes
+const SCAN_MIN_LENGTH = 4;      // shortest plausible barcode (EAN-8 is 8 digits)
+let _scanBuffer = '';
+let _scanLastKeyAt = 0;
+let _scanIndicatorTimer = null;
+
+function isEditableTarget(t) {
+    if (!t) return false;
+    const tag = (t.tagName || '').toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
+}
+
+function flashScanIndicator(text, kind) {
+    const ind = el('scanIndicator');
+    if (!ind) return;
+    ind.classList.remove('scan-ok', 'scan-err');
+    if (kind === 'ok') ind.classList.add('scan-ok');
+    if (kind === 'err') ind.classList.add('scan-err');
+    ind.textContent = text;
+    clearTimeout(_scanIndicatorTimer);
+    _scanIndicatorTimer = setTimeout(() => {
+        ind.classList.remove('scan-ok', 'scan-err');
+        ind.textContent = '📡 Scan tayyor';
+    }, 2500);
+}
+
+function handleBarcodeScan(code) {
+    const product = state.productByBarcode.get(code);
+    if (!product) {
+        flashScanIndicator(`❌ ${code} topilmadi`, 'err');
+        toast(`⚠️ Shtrix-kod topilmadi: ${code}`);
+        return;
+    }
+    if (productStockState(product) === 'out') {
+        flashScanIndicator(`⛔ ${product.name}: tugagan`, 'err');
+        toast(`⛔ ${product.name}: ombor tugagan — savatchaga qo'shilmaydi`);
+        return;
+    }
+    if (product.sold_by === 'weight') {
+        // Can't infer weight from a regular EAN — pop the modal so the
+        // cashier types the weighed amount. If this product is already
+        // in the basket, prefill the modal with its current weight so a
+        // second scan means "edit" rather than "reset to 1 kg".
+        const existing = state.basket.get(product.id);
+        openWeightModal(product, existing ? existing.quantity : null);
+        const label = existing
+            ? `✎ ${product.name} (${fmtQty(product, existing.quantity)})`
+            : `⚖ ${product.name}`;
+        flashScanIndicator(label, 'ok');
+    } else {
+        addToBasket(product.id, 1);
+        // Surface the running count so a stacked scan is obvious.
+        const entry = state.basket.get(product.id);
+        const newQty = entry ? entry.quantity : 1;
+        flashScanIndicator(`✓ ${product.name} × ${newQty}`, 'ok');
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    // Let the user type freely in inputs / textareas / selects.
+    if (isEditableTarget(e.target)) return;
+
+    const now = performance.now();
+    const gap = now - _scanLastKeyAt;
+    _scanLastKeyAt = now;
+
+    // Stale buffer? Reset if too much time passed since the last char.
+    if (gap > SCAN_MAX_GAP_MS && _scanBuffer.length > 0) {
+        _scanBuffer = '';
+    }
+
+    if (e.key === 'Enter' || e.key === 'Tab') {
+        if (_scanBuffer.length >= SCAN_MIN_LENGTH) {
+            const code = _scanBuffer;
+            _scanBuffer = '';
+            e.preventDefault();
+            handleBarcodeScan(code);
+        } else {
+            _scanBuffer = '';
+        }
+        return;
+    }
+
+    // Buffer single printable characters (digits, occasionally letters for Code-128).
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        _scanBuffer += e.key;
+        // Cap buffer length to avoid runaway accumulation.
+        if (_scanBuffer.length > 40) _scanBuffer = _scanBuffer.slice(-40);
+    }
 });
 
 // ===== Checkout =====

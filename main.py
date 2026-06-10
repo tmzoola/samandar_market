@@ -32,15 +32,20 @@ from auth import (
 from database import get_session
 from models import Admin, Product, Transaction
 from schemas import (
+    AdjustIn,
     AdminLogin,
     AdminOut,
     CheckoutIn,
     DailyReport,
     DailySummary,
     HourlyBucket,
+    InventoryItem,
+    InventoryReport,
     ProductCreate,
     ProductOut,
     ProductUpdate,
+    RefillIn,
+    StockMovementOut,
     TopProduct,
     TopProductsReport,
     TransactionItemOut,
@@ -87,6 +92,8 @@ def _serialize_product(p: Product) -> dict:
         "is_active": p.is_active,
         "sold_by": p.sold_by,
         "unit_label": p.unit_label,
+        "stock": float(p.stock) if p.stock is not None else 0.0,
+        "low_stock_threshold": float(p.low_stock_threshold) if p.low_stock_threshold is not None else None,
     }
 
 
@@ -151,21 +158,21 @@ async def checkout(
 
 
 @app.delete("/api/transactions/{tx_id}", status_code=204)
-async def void_transaction(
+async def void_transaction_endpoint(
     tx_id: int,
     db: AsyncSession = Depends(get_session),
 ) -> Response:
     """Void a just-completed sale. Used by the cashier's receipt modal.
 
-    Hard-deletes the transaction + its items (FK is ON DELETE CASCADE).
-    The dashboard only exposes this for the latest receipt, so the
-    blast radius is naturally limited to the active customer.
+    Hard-deletes the transaction + its items and restores stock for each
+    line via `crud.void_transaction`. Original `sale` movements remain in
+    the ledger (with `transaction_id` SET NULL) alongside new `void`
+    movements, so the audit log shows both halves of the round trip.
     """
     tx = await db.get(Transaction, tx_id)
     if tx is None:
         raise HTTPException(status_code=404, detail="Tranzaksiya topilmadi")
-    await db.delete(tx)
-    await db.commit()
+    await crud.void_transaction(db, tx)
     return Response(status_code=204)
 
 
@@ -258,6 +265,105 @@ async def delete_product_endpoint(
 
     soft = await crud.soft_delete_product(db, product)
     return ProductOut.model_validate(soft)
+
+
+# ---------- Inventory ----------
+
+def _inventory_item(p: Product) -> InventoryItem:
+    stock = float(p.stock or 0)
+    threshold = float(p.low_stock_threshold) if p.low_stock_threshold is not None else None
+    return InventoryItem(
+        product_id=p.id,
+        name=p.name,
+        emoji=p.emoji,
+        category=p.category,
+        sold_by=p.sold_by,
+        unit_label=p.unit_label,
+        stock=stock,
+        low_stock_threshold=threshold,
+        is_active=p.is_active,
+        status=crud._stock_status(p),
+    )
+
+
+@app.get("/api/inventory", response_model=InventoryReport)
+async def inventory_list(
+    _admin: Annotated[Admin, Depends(get_current_admin)],
+    include_inactive: bool = False,
+    db: AsyncSession = Depends(get_session),
+) -> InventoryReport:
+    products = await crud.list_inventory(db, only_active=not include_inactive)
+    items = [_inventory_item(p) for p in products]
+    return InventoryReport(
+        total_products=len(items),
+        out_of_stock=sum(1 for it in items if it.status == "out"),
+        low_stock=sum(1 for it in items if it.status == "low"),
+        items=items,
+    )
+
+
+@app.get("/api/inventory/low-stock", response_model=list[InventoryItem])
+async def inventory_low_stock(
+    _admin: Annotated[Admin, Depends(get_current_admin)],
+    db: AsyncSession = Depends(get_session),
+) -> list[InventoryItem]:
+    products = await crud.list_inventory(db, only_active=True)
+    flagged = [_inventory_item(p) for p in products if crud._stock_status(p) in ("low", "out")]
+    # Most urgent first: out-of-stock, then by stock relative to threshold.
+    def urgency(it: InventoryItem) -> tuple[int, float]:
+        out_first = 0 if it.status == "out" else 1
+        ratio = (it.stock / it.low_stock_threshold) if it.low_stock_threshold else it.stock
+        return (out_first, ratio)
+    flagged.sort(key=urgency)
+    return flagged
+
+
+@app.post("/api/inventory/{product_id}/refill", response_model=StockMovementOut)
+async def inventory_refill(
+    product_id: int,
+    payload: RefillIn,
+    _admin: Annotated[Admin, Depends(get_current_admin)],
+    db: AsyncSession = Depends(get_session),
+) -> StockMovementOut:
+    product = await crud.get_product(db, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Mahsulot topilmadi")
+    try:
+        movement = await crud.refill_product(db, product, payload.quantity, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return StockMovementOut.model_validate(movement)
+
+
+@app.post("/api/inventory/{product_id}/adjust", response_model=StockMovementOut)
+async def inventory_adjust(
+    product_id: int,
+    payload: AdjustIn,
+    _admin: Annotated[Admin, Depends(get_current_admin)],
+    db: AsyncSession = Depends(get_session),
+) -> StockMovementOut:
+    product = await crud.get_product(db, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Mahsulot topilmadi")
+    try:
+        movement = await crud.adjust_product_stock(db, product, payload.new_stock, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return StockMovementOut.model_validate(movement)
+
+
+@app.get("/api/inventory/{product_id}/movements", response_model=list[StockMovementOut])
+async def inventory_movements(
+    product_id: int,
+    _admin: Annotated[Admin, Depends(get_current_admin)],
+    limit: int = 100,
+    db: AsyncSession = Depends(get_session),
+) -> list[StockMovementOut]:
+    product = await crud.get_product(db, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Mahsulot topilmadi")
+    movements = await crud.list_movements(db, product_id=product_id, limit=limit)
+    return [StockMovementOut.model_validate(m) for m in movements]
 
 
 # ---------- Reports ----------

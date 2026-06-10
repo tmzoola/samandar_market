@@ -21,6 +21,9 @@ class ProductBase(BaseModel):
     is_active: bool = True
     sold_by: SoldBy = "unit"
     unit_label: str | None = Field(default=None, max_length=8)
+    # Initial stock when creating; current stock when updating.
+    stock: float = 0
+    low_stock_threshold: float | None = None
 
 
 class ProductCreate(ProductBase):
@@ -36,12 +39,64 @@ class ProductUpdate(BaseModel):
     is_active: bool | None = None
     sold_by: SoldBy | None = None
     unit_label: str | None = Field(default=None, max_length=8)
+    # Note: editing `stock` directly here writes the raw value WITHOUT a
+    # movement row — use /api/inventory/{id}/adjust for tracked changes.
+    stock: float | None = None
+    low_stock_threshold: float | None = None
 
 
 class ProductOut(ProductBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     created_at: datetime
+
+
+# ---------- Inventory ----------
+
+class StockMovementOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    product_id: int
+    delta: float
+    balance_after: float
+    reason: str
+    transaction_id: int | None
+    note: str | None
+    created_at: datetime
+
+
+class RefillIn(BaseModel):
+    """Add to current stock — typical "supplier delivered N kg/units"."""
+    quantity: float = Field(gt=0)
+    note: str | None = Field(default=None, max_length=255)
+
+
+class AdjustIn(BaseModel):
+    """Set stock to an exact value — typical "physical recount said N"."""
+    new_stock: float = Field(ge=0)
+    note: str = Field(min_length=1, max_length=255)
+
+
+class InventoryItem(BaseModel):
+    """Row in the admin inventory view."""
+    product_id: int
+    name: str
+    emoji: str | None
+    category: str
+    sold_by: SoldBy
+    unit_label: str | None
+    stock: float
+    low_stock_threshold: float | None
+    is_active: bool
+    # "ok" | "low" | "out"
+    status: str
+
+
+class InventoryReport(BaseModel):
+    total_products: int
+    out_of_stock: int
+    low_stock: int
+    items: list[InventoryItem]
 
 
 # ---------- Checkout / Transactions ----------
