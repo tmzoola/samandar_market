@@ -547,6 +547,45 @@
     }
     .modal-void:hover:not(:disabled) { background: #fee2e2; }
     .modal-void:disabled { opacity: 0.55; cursor: not-allowed; }
+    .modal-print {
+        padding: 14px 18px;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.15s;
+        background: #fff;
+        color: var(--text);
+        border: 2px solid var(--border);
+    }
+    .modal-print:hover { background: #f1f5f9; border-color: var(--text-muted); }
+
+    /* ---------- Thermal receipt print styles ---------- */
+    @media print {
+        body > *:not(#printArea) { display: none !important; }
+        #printArea {
+            display: block !important;
+            width: 72mm;
+            margin: 0;
+            padding: 0;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 11pt;
+            color: #000;
+        }
+        .pr-center { text-align: center; }
+        .pr-bold { font-weight: bold; }
+        .pr-divider { border: none; border-top: 1px dashed #000; margin: 4pt 0; }
+        .pr-line {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10pt;
+            line-height: 1.5;
+        }
+        .pr-line .pr-name { flex: 1; padding-right: 4pt; }
+        .pr-line .pr-amount { white-space: nowrap; }
+        .pr-grand { font-size: 13pt; font-weight: bold; }
+        .pr-footer { text-align: center; font-size: 9pt; margin-top: 6pt; }
+    }
 
     /* ---------- Weight modal ---------- */
     .weight-row {
@@ -797,10 +836,14 @@
         </div>
         <div class="modal-actions">
             <button type="button" class="modal-void" id="voidBtn">❌ Bekor qilish</button>
+            <button type="button" class="modal-print" id="printBtn">🖨 Chek chiqarish</button>
             <button type="button" class="modal-close" id="modalCloseBtn">Yangi mijoz</button>
         </div>
     </div>
 </div>
+
+<!-- Hidden area rendered only when printing -->
+<div id="printArea" style="display:none;"></div>
 
 <!-- Weight entry modal -->
 <div class="modal-backdrop" id="weightModal">
@@ -1328,6 +1371,7 @@ let currentReceiptTxId = null;
 function renderReceipt(tx) {
     // tx is the server response: { id, total_amount, cash_received, change_amount, created_at, items: [...] }
     currentReceiptTxId = tx.id;
+    _lastTx = tx;
     const itemsEl = el('receiptItems');
     itemsEl.innerHTML = '';
     for (const it of tx.items) {
@@ -1422,6 +1466,7 @@ function newCustomer() {
     state.basket.clear();
     cashInput.value = '';
     currentReceiptTxId = null;
+    _lastTx = null;
     renderBasket();
     el('receiptModal').classList.remove('open');
     searchInput.value = '';
@@ -1438,6 +1483,53 @@ el('voidBtn').addEventListener('click', voidCurrentTransaction);
 el('btnNew').addEventListener('click', () => {
     if (state.basket.size > 0 && !confirm("Savatchani bo'shatish?")) return;
     newCustomer();
+});
+
+// ===== Receipt printing =====
+function printReceipt(tx) {
+    const area = el('printArea');
+    const ts = new Date(tx.created_at);
+    const dateStr = ts.toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+
+    let itemRows = '';
+    for (const it of tx.items) {
+        const qtyLabel = it.sold_by === 'weight'
+            ? `${Number(it.quantity).toFixed(3).replace(/\.?0+$/, '')} ${it.unit_label || 'kg'}`
+            : `x${it.quantity}`;
+        itemRows += `
+            <div class="pr-line">
+                <span class="pr-name">${escapeHtml(it.product_name)}</span>
+            </div>
+            <div class="pr-line">
+                <span class="pr-name" style="padding-left:8pt">${qtyLabel}</span>
+                <span class="pr-amount">${fmt(it.line_total)}</span>
+            </div>`;
+    }
+
+    area.innerHTML = `
+        <div class="pr-center pr-bold" style="font-size:14pt;">Samandar Market</div>
+        <div class="pr-center" style="font-size:9pt;">Chek №${tx.id}</div>
+        <div class="pr-center" style="font-size:9pt;">${dateStr}</div>
+        <hr class="pr-divider"/>
+        ${itemRows}
+        <hr class="pr-divider"/>
+        <div class="pr-line"><span class="pr-name">Jami:</span><span class="pr-amount pr-bold">${fmt(tx.total_amount)}</span></div>
+        <div class="pr-line"><span class="pr-name">Naqd:</span><span class="pr-amount">${fmt(tx.cash_received)}</span></div>
+        <div class="pr-line"><span class="pr-name">Qaytim:</span><span class="pr-amount">${fmt(tx.change_amount)}</span></div>
+        <hr class="pr-divider"/>
+        <div class="pr-footer">Xarid uchun rahmat!</div>
+    `;
+
+    window.print();
+}
+
+let _lastTx = null;
+
+el('printBtn').addEventListener('click', () => {
+    if (_lastTx) printReceipt(_lastTx);
 });
 
 // ===== Boot =====
